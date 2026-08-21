@@ -1,0 +1,56 @@
+name: Rehearse bypass push
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.REHEARSAL_APP_ID }}
+          private-key: ${{ secrets.REHEARSAL_APP_PRIVATE_KEY }}
+
+      - name: Re-checkout with the App token
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Commit a scratch change
+        run: |
+          git config user.name "bcwallet-release-bot[bot]"
+          git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > rehearsal-scratch.txt
+          git add rehearsal-scratch.txt
+          git commit -s -m "chore: rehearsal commit ${{ github.run_number }}"
+
+      - name: Push with rebase retry
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "pushed on attempt ${attempt}"
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::could not push rehearsal commit after 5 attempts"
+              exit 1
+            fi
+            echo "push rejected, rebasing onto latest main"
+            git fetch origin main
+            git rebase origin/main
+          done
+
+      - name: Tag after push succeeds
+        run: |
+          TAG="rehearsal-${{ github.run_number }}"
+          git tag "$TAG"
+          git push origin "$TAG"
