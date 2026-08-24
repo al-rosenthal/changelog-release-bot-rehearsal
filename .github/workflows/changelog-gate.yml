@@ -1,0 +1,32 @@
+name: Changelog Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
+
+jobs:
+  changelog-entry:
+    name: Changelog Entry
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+
+      - name: Verify a .changes/*.md file was added
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.labels.*.name, 'status/skip-changelog')
+        run: |
+          added=$(git diff --diff-filter=A --name-only "origin/${GITHUB_BASE_REF}"...HEAD -- '.changes/*.md')
+          if [ -z "$added" ]; then
+            echo "::error::No .changes/*.md file added in this PR. Add one describing your change for a non-technical reader, or apply the 'status/skip-changelog' label if this PR doesn't need one."
+            exit 1
+          fi
+          echo "Found changelog entry: $added"
