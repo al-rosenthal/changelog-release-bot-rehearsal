@@ -1,0 +1,70 @@
+name: Release Rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_empty:
+        description: 'Allow release even with no pending .changes entries'
+        type: boolean
+        default: false
+
+jobs:
+  finalize-release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.REHEARSAL_APP_ID }}
+          private-key: ${{ secrets.REHEARSAL_APP_PRIVATE_KEY }}
+
+      # Checked out once, already authenticated as the App, so assemble's
+      # writes/deletes land on the same working tree we later commit from
+      # (no second checkout to stomp on them).
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - run: npm install
+
+      - name: Assemble changelog
+        run: |
+          node scripts/changelog/index.mjs assemble ${{ github.run_number }} \
+            --variant bcsc-prod \
+            ${{ inputs.allow_empty && '--allow-empty' || '' }}
+
+      - name: Commit and push
+        run: |
+          git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git add CHANGELOG.md .changes
+          if git diff --cached --quiet; then
+            echo "Nothing to commit (empty release)."
+            exit 0
+          fi
+          git commit -s -m "chore: release rehearsal build ${{ github.run_number }}"
+
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "pushed on attempt ${attempt}"
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::could not push release commit after 5 attempts"
+              exit 1
+            fi
+            echo "push rejected, rebasing onto latest main"
+            git fetch origin main
+            git rebase origin/main
+          done
+
+          TAG="release-rehearsal-${{ github.run_number }}"
+          git tag "$TAG"
+          git push origin "$TAG"
